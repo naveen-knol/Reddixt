@@ -1,23 +1,79 @@
 """
 Reddit Collector for the AI Intelligence System.
-Uses Reddit's public JSON endpoints — no API key required.
+Uses Reddit OAuth API when credentials are available, falls back to public JSON endpoints.
 Pulls posts from target subreddits, calculates engagement scores, and stores them.
 """
 
 import math
+import os
 import time
 from datetime import datetime, timezone
 
 import requests
+from dotenv import load_dotenv
 
 from database import Database
 
-USER_AGENT = "Reddixt/1.0 (AI Intelligence System; personal use)"
-BASE_URL = "https://www.reddit.com"
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+
+USER_AGENT = "Reddixt/1.0 (by /u/reddixt_bot)"
+PUBLIC_URL = "https://www.reddit.com"
+OAUTH_URL = "https://oauth.reddit.com"
+TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
 REQUEST_TIMEOUT = 15
 
 MIN_BODY_LENGTH = 30
 MIN_SCORE = 2
+
+# Module-level token cache
+_oauth_token = None
+
+
+def get_oauth_token():
+    """Get an OAuth bearer token using client credentials.
+
+    Returns the token string, or None if credentials aren't configured.
+    """
+    global _oauth_token
+    if _oauth_token:
+        return _oauth_token
+
+    client_id = os.getenv("REDDIT_CLIENT_ID")
+    client_secret = os.getenv("REDDIT_CLIENT_SECRET")
+
+    if not client_id or not client_secret:
+        return None
+
+    try:
+        resp = requests.post(
+            TOKEN_URL,
+            auth=(client_id, client_secret),
+            data={"grant_type": "client_credentials"},
+            headers={"User-Agent": USER_AGENT},
+            timeout=REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        token_data = resp.json()
+        _oauth_token = token_data.get("access_token")
+        if _oauth_token:
+            print(f"  Reddit OAuth: authenticated (token expires in {token_data.get('expires_in', '?')}s)")
+        return _oauth_token
+    except Exception as e:
+        print(f"  Reddit OAuth failed: {e}. Falling back to public endpoints.")
+        return None
+
+
+def _get_headers(token=None):
+    """Build request headers, with OAuth bearer token if available."""
+    headers = {"User-Agent": USER_AGENT}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _get_base_url(token=None):
+    """Use OAuth endpoint when authenticated, public endpoint otherwise."""
+    return OAUTH_URL if token else PUBLIC_URL
 
 
 def calculate_engagement_score(score, num_comments, posted_utc):
@@ -36,16 +92,18 @@ def calculate_engagement_score(score, num_comments, posted_utc):
     return round(score_component * (1 + comment_ratio) * recency_weight, 3)
 
 
-def fetch_subreddit_posts(subreddit_name, limit=100, sort="hot", max_age_hours=None):
-    """Fetch posts from a subreddit using the public JSON endpoint.
+def fetch_subreddit_posts(subreddit_name, limit=100, sort="hot", max_age_hours=None, token=None):
+    """Fetch posts from a subreddit.
 
     Args:
-        sort: "hot" for trending posts, "new" for chronological (daily mode)
+        sort: "hot" for trending posts, "new" for chronological
         max_age_hours: if set, only return posts younger than this many hours
+        token: OAuth bearer token (uses public endpoint if None)
     """
-    url = f"{BASE_URL}/r/{subreddit_name}/{sort}.json"
+    base_url = _get_base_url(token)
+    url = f"{base_url}/r/{subreddit_name}/{sort}.json"
     params = {"limit": min(limit, 100), "raw_json": 1}
-    headers = {"User-Agent": USER_AGENT}
+    headers = _get_headers(token)
 
     cutoff = None
     if max_age_hours:
@@ -86,11 +144,12 @@ def fetch_subreddit_posts(subreddit_name, limit=100, sort="hot", max_age_hours=N
     return all_posts[:limit]
 
 
-def fetch_post_comments(post_id, limit=5):
-    """Fetch top comments for a post using the public JSON endpoint."""
-    url = f"{BASE_URL}/comments/{post_id}.json"
+def fetch_post_comments(post_id, limit=5, token=None):
+    """Fetch top comments for a post."""
+    base_url = _get_base_url(token)
+    url = f"{base_url}/comments/{post_id}.json"
     params = {"limit": limit, "depth": 1, "raw_json": 1}
-    headers = {"User-Agent": USER_AGENT}
+    headers = _get_headers(token)
 
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
@@ -113,14 +172,14 @@ def fetch_post_comments(post_id, limit=5):
         return []
 
 
-def collect_subreddit(db, source, limit=100, sort="hot", max_age_hours=None):
+def collect_subreddit(db, source, limit=100, sort="hot", max_age_hours=None, token=None):
     """Collect posts from a single subreddit."""
     subreddit_name = source["name"].replace("r/", "")
     collected = 0
     skipped = 0
 
     try:
-        posts = fetch_subreddit_posts(subreddit_name, limit, sort=sort, max_age_hours=max_age_hours)
+        posts = fetch_subreddit_posts(subreddit_name, limit, sort=sort, max_age_hours=max_age_hours, token=token)
 
         for item in posts:
             post = item.get("data", {})
@@ -161,7 +220,7 @@ def collect_subreddit(db, source, limit=100, sort="hot", max_age_hours=None):
                 full_body = f"[Link post: {link_url}]\n\n{body}"
 
             # Fetch top comments for additional signal
-            top_comments = fetch_post_comments(post_id, limit=5)
+            top_comments = fetch_post_comments(post_id, limit=5, token=token)
             if top_comments:
                 full_body += "\n\n--- Top Comments ---\n" + "\n---\n".join(top_comments)
 
@@ -204,11 +263,16 @@ def collect_all(limit=100, sort="hot", max_age_hours=None):
     """Collect from all tracked subreddits.
 
     Args:
-        sort: "hot" for trending, "new" for chronological (daily mode)
+        sort: "hot" for trending, "new" for chronological
         max_age_hours: if set, only collect posts from the last N hours
     """
     db = Database()
     sources = db.get_sources(source_type="reddit")
+
+    # Get OAuth token (falls back to public if not configured)
+    token = get_oauth_token()
+    auth_mode = "OAuth" if token else "public (no REDDIT_CLIENT_ID set)"
+    print(f"  Auth mode: {auth_mode}")
 
     total_collected = 0
     total_skipped = 0
@@ -218,13 +282,13 @@ def collect_all(limit=100, sort="hot", max_age_hours=None):
 
     for source in sources:
         print(f"  {source['name']}...", end=" ", flush=True)
-        collected, skipped = collect_subreddit(db, source, limit, sort=sort, max_age_hours=max_age_hours)
+        collected, skipped = collect_subreddit(db, source, limit, sort=sort, max_age_hours=max_age_hours, token=token)
         total_collected += collected
         total_skipped += skipped
         print(f"{collected} new, {skipped} duplicates")
 
-        # 2s delay between subreddits for public endpoint rate limits
-        time.sleep(2)
+        # 1s delay between subreddits (OAuth allows 60 req/min)
+        time.sleep(1)
 
     print(f"\nDone. Collected {total_collected} new posts, skipped {total_skipped} duplicates.")
     db.close()

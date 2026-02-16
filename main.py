@@ -1,6 +1,6 @@
 """
 Railway entry point for the AI Intelligence System.
-Runs the daily pipeline once, then exits. Railway cron handles scheduling.
+Runs the weekly pipeline once, then exits. Railway cron handles scheduling.
 """
 
 import os
@@ -15,11 +15,11 @@ from orchestrator import Orchestrator
 
 def main():
     start = datetime.now()
-    print(f"[{start.strftime('%Y-%m-%d %H:%M:%S')}] Daily pipeline starting...")
+    print(f"[{start.strftime('%Y-%m-%d %H:%M:%S')}] Weekly pipeline starting...")
 
     try:
         orchestrator = Orchestrator()
-        orchestrator.run_daily_pipeline()
+        orchestrator.run_weekly_pipeline()
         end = datetime.now()
         duration = (end - start).total_seconds()
         print(f"\n[{end.strftime('%Y-%m-%d %H:%M:%S')}] Pipeline completed in {duration:.0f}s")

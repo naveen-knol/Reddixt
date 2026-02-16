@@ -71,35 +71,35 @@ class Orchestrator:
             print(f"  Briefing: {briefing_path}")
         print(f"{'='*60}")
 
-    def run_daily_pipeline(self, limit=100, batch_size=100):
-        """Daily automated run: collect last 24h -> process -> score -> brief -> export -> email."""
+    def run_weekly_pipeline(self, limit=100, batch_size=100):
+        """Weekly automated run: collect last 7 days -> process -> score -> brief -> export -> email."""
         print(f"{'='*60}")
-        print(f"  AI Intelligence System -- Daily Pipeline")
+        print(f"  AI Intelligence System -- Weekly Pipeline")
         print(f"  Started at: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         print(f"{'='*60}")
 
-        # Collect only new posts from the last 24 hours
-        collected = self.collect(limit=limit, sort="new", max_age_hours=24)
+        # Collect posts from the last 7 days
+        collected = self.collect(limit=limit, sort="new", max_age_hours=168)
         if collected == 0:
-            print("\nNo new posts in the last 24h. Skipping remaining phases.")
+            print("\nNo new posts in the last 7 days. Skipping remaining phases.")
             return
 
         processed = self.process(batch_size=batch_size)
-        ideas = self.score(days=1)
+        ideas = self.score(days=7)
         briefing_path = self.brief()
         excel_path = self.export()
-        self.email(briefing_path=briefing_path, excel_path=excel_path)
+        email_sent = self.email(briefing_path=briefing_path, excel_path=excel_path)
 
         print(f"\n{'='*60}")
-        print(f"  Daily Pipeline Complete")
-        print(f"  Posts collected (24h): {collected}")
+        print(f"  Weekly Pipeline Complete")
+        print(f"  Posts collected (7 days): {collected}")
         print(f"  Insights extracted: {processed}")
         print(f"  Ideas created: {ideas}")
         if briefing_path:
             print(f"  Briefing: {briefing_path}")
         if excel_path:
             print(f"  Excel: {excel_path}")
-        print(f"  Email: sent")
+        print(f"  Email: {'sent' if email_sent else 'FAILED'}")
         print(f"{'='*60}")
 
     def status(self):
@@ -139,10 +139,10 @@ def main():
     full_parser.add_argument("--batch", type=int, default=50, help="LLM processing batch size (default: 50)")
     full_parser.add_argument("--days", type=int, default=7, help="Days back for scoring (default: 7)")
 
-    # Daily pipeline
-    daily_parser = subparsers.add_parser("daily", help="Run daily pipeline (24h collection + email with Excel)")
-    daily_parser.add_argument("--limit", type=int, default=100, help="Posts per subreddit (default: 100)")
-    daily_parser.add_argument("--batch", type=int, default=100, help="LLM processing batch size (default: 100)")
+    # Weekly pipeline
+    weekly_parser = subparsers.add_parser("weekly", help="Run weekly pipeline (7-day collection + email with Excel)")
+    weekly_parser.add_argument("--limit", type=int, default=100, help="Posts per subreddit (default: 100)")
+    weekly_parser.add_argument("--batch", type=int, default=100, help="LLM processing batch size (default: 100)")
 
     # Individual phases
     collect_parser = subparsers.add_parser("collect", help="Collect posts from Reddit")
@@ -170,8 +170,8 @@ def main():
         orchestrator.run_full_pipeline(
             limit=args.limit, batch_size=args.batch, days=args.days
         )
-    elif args.command == "daily":
-        orchestrator.run_daily_pipeline(
+    elif args.command == "weekly":
+        orchestrator.run_weekly_pipeline(
             limit=args.limit, batch_size=args.batch
         )
     elif args.command == "collect":

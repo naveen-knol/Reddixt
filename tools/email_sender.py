@@ -123,7 +123,8 @@ def _build_message(subject, email_from, email_to, briefing_content, excel_path=N
 
 def _send(msg, email_from, email_password, email_to):
     """Send message via SMTP."""
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+    print(f"  Connecting to {SMTP_SERVER}:{SMTP_PORT} as {email_from}...")
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as server:
         server.starttls()
         server.login(email_from, email_password)
         server.sendmail(email_from, email_to, msg.as_string())
@@ -167,13 +168,16 @@ def send_briefing(filepath=None, content=None):
 
 
 def send_daily_report(briefing_path=None, excel_path=None):
-    """Send the daily briefing with Excel attachment."""
+    """Send the weekly briefing with Excel attachment."""
     email_from = os.getenv("EMAIL_FROM")
     email_password = os.getenv("EMAIL_PASSWORD")
     email_to = os.getenv("EMAIL_TO")
 
     if not all([email_from, email_password, email_to]):
-        print("Error: EMAIL_FROM, EMAIL_PASSWORD, and EMAIL_TO must be set in .env")
+        print("Error: EMAIL_FROM, EMAIL_PASSWORD, and EMAIL_TO must be set as environment variables")
+        print(f"  EMAIL_FROM: {'set' if email_from else 'MISSING'}")
+        print(f"  EMAIL_PASSWORD: {'set' if email_password else 'MISSING'}")
+        print(f"  EMAIL_TO: {'set' if email_to else 'MISSING'}")
         return False
 
     # Get briefing content
@@ -188,23 +192,26 @@ def send_daily_report(briefing_path=None, excel_path=None):
         return False
 
     date_str = datetime.now().strftime("%Y-%m-%d")
-    subject = f"Daily AI Intelligence Report - {date_str}"
+    subject = f"Weekly AI Intelligence Report - {date_str}"
 
     msg = _build_message(subject, email_from, email_to, content, excel_path=excel_path)
 
     try:
         _send(msg, email_from, email_password, email_to)
-        print(f"Daily report sent to {email_to}")
+        print(f"Report sent to {email_to}")
         print(f"  Subject: {subject}")
         print(f"  Briefing: {briefing_path}")
         if excel_path:
             print(f"  Excel attached: {os.path.basename(excel_path)}")
         return True
     except smtplib.SMTPAuthenticationError:
-        print("Authentication failed. Check EMAIL_FROM and EMAIL_PASSWORD in .env.")
+        print("EMAIL FAILED: Authentication error. Check EMAIL_FROM and EMAIL_PASSWORD.")
+        print("  For Gmail, make sure you're using an App Password, not your regular password.")
         return False
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        print(f"EMAIL FAILED: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
